@@ -1,0 +1,8 @@
+[submodule "david-reichel.github.io"]
+	path = david-reichel.github.io
+	url = git@github.com:david-reichel/david-reichel.github.io.git
+	branch = master
+[submodule "public"]
+	path = public
+	url = git@github.com:david-reichel/david-reichel.github.io.git
+	branch = master
