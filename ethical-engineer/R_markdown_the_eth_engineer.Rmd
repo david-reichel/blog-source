@@ -1,0 +1,261 @@
+---
+title: "The ethical engineer - 'depends on what it is'"
+author: "David Reichel"
+output: html_notebook
+---
+
+This is the code for analysis of the blog post - the ethical engineer. It includes analysis of survey data and then matching some country level results.
+
+The first chunk loads libraries and defines some objects needed.
+
+
+```{r}
+knitr::opts_chunk$set(echo = TRUE, warnings = FALSE, message = FALSE)
+library(tidyverse)
+library(broom)
+theme_set(theme_bw())
+library(countrycode) 
+library(knitr)
+library(lme4)
+library(openxlsx)
+EUlist2 <- c("AT","BE","BG","HR","CY",
+             "CZ","DK","EE","FI",
+             "FR","DE","EL","HU",
+             "IE","IT","LV","LT",
+             "LU","MT","NL","PL",
+             "PT","RO","SK","SI",
+             "ES","SE","UK")
+
+## helper function for coeficient plots from regressions
+plot.coef <- function(df) {
+  df <- dplyr::filter(df, group == "fixed")
+  ggplot(df, aes(estimate, term)) +
+    geom_vline(xintercept = 0, linetype = 2) +
+    geom_segment(aes(x = estimate - 2.576*std.error,
+                     xend = estimate + 2.576*std.error,
+                     y = term, yend = term), size = 1, alpha = 0.6) +
+    geom_segment(aes(x = estimate - 1.96*std.error,
+                     xend = estimate + 1.96*std.error,
+                     y = term, yend = term), size = 1, alpha = 0.8) +
+    geom_point(size = 2)
+}
+
+```
+
+The next chunk loads the data of the [Stack Overflow](https://stackoverflow.com/) developer survey 2018, available from here: https://insights.stackoverflow.com/survey/2018/. I first loaded the full dataset, recoded some variables as needed for the analysis and then saved a reduced dataset. 
+I proceed with some descriptive statistics calculating the basic descriptives (tables) for the post. I store them as objects to use them in the blog/R markdown in the blogpost.
+
+```{r}
+
+## source information: https://insights.stackoverflow.com/survey/2018/ 
+# data preparation
+dat <- read.csv("survey_results_public.csv",
+                stringsAsFactors = FALSE)
+
+# some recoding
+dat$iso2 <- countrycode(dat$Country, "country.name", "iso2c") %>% suppressWarnings()
+
+dat <- dat %>%
+  mutate(EU = as.integer(iso2 %in% c(EUlist2, "GB", "GR")),
+         unethical = ifelse(EthicsChoice == "Yes", 1, 0),
+         ethical = ifelse(EthicsChoice == "No", 1, 0),
+         Gender = ifelse(Gender == "Male", "Male",
+                     ifelse(Gender == "Female", "Female", "Other")),
+         white = ifelse(RaceEthnicity == "White or of European descent", 1, 0),
+         CareerSatisfaction = ifelse(CareerSatisfaction %in% c("Extremely dissafisfied",
+                                                         "Moderately dissatisfied",
+                                                         "Slightly dissatisfied"),
+                               "Dissatisfied", "Not dissatisfied"),
+         Age = fct_relevel(Age, "Under 18 years old")) %>%
+  dplyr::select(EthicsChoice, unethical, ethical,
+                EthicsReport, EthicsResponsible, EthicalImplications,
+                     Gender, Age, white,
+                     YearsCoding, CareerSatisfaction,
+                     Employment, FormalEducation,
+                     iso2, EU)
+
+# write.csv(dat, file = "survey_results_public_reduced.csv", row.names = FALSE)
+# 
+# dat <- read.csv("survey_results_public_reduced.csv", stringsAsFactors = FALSE)
+
+# The following questions were asked, which will be analysed:
+# Imagine that you were asked to write code for a purpose or product that
+# you consider extremely unethical. Do you write the code anyway?
+t1 <- count(dat, EthicsChoice) %>%
+  na.omit() %>%
+  mutate(percentage = round(100*(n / sum(n)), 1))
+
+t2_tit <- "Do you report or otherwise call out the unethical code in question?"
+t2 <- count(dat, EthicsReport) %>%
+  na.omit() %>%
+  mutate(percentage = round(100*(n / sum(n)), 1))
+
+t3_tit <- "Who do you believe is ultimately most responsible for code that accomplishes something unethical?"
+t3 <- count(dat, EthicsResponsible) %>%
+  na.omit() %>%
+  mutate(percentage = round(100*(n / sum(n)), 1))
+
+# Ethics obligation EthicalImplications,
+t4_tit <- "Do you believe that you have an obligation to consider the ethical implications of the code that you write?"
+t4 <- count(dat, EthicalImplications) %>%
+  na.omit() %>%
+  mutate(percentage = round(100*(n / sum(n)), 1))
+
+```
+
+Now the first graph with ggplot2. 
+
+```{r}
+p1 <- ggplot(t1) +
+  geom_col(aes(reorder(EthicsChoice, percentage), percentage)) +
+  geom_text(aes(reorder(EthicsChoice, percentage), percentage, 
+                 label = paste(EthicsChoice, "\n (", percentage, "%)")), vjust = -0.3) +
+  scale_y_continuous(limits = c(0,75)) +
+  labs(y = "Percentage", x = "",
+       title = "Figure 1: Developers willing to write unethical code",
+       caption = paste0("Question: Imagine that you were asked to write code for a purpose or product that you consider extremely unethical.\nDo you write the code anyway?, \n Own calculations based on Stack Overflow Developer Survey 2018, N = ", sum(t1$n))) +
+  theme(axis.text.x = element_blank(), axis.ticks.x = element_blank())
+
+```
+
+```{r}
+p1
+```
+
+
+The I run the basic regression. I did a few tests of different models (e.g. without country included, with country as fixed effects, etc.) Finally, I settled for the one you see below with modelling the country as a varying intercept (hence assuming that the share varies across countries following a normal distribution). As I did not want the rendering of the blog post taking too long, I saved the model out first and then loaded the data I needed for the graph. 
+
+
+```{r}
+
+# m2a <- glmer(ethical ~ Gender + Age + # white +
+#             CareerSatisfaction + EU + (1 | iso2),
+#           data = dat,
+#           family = binomial(link = "logit"))
+# m2a <- tidy(m2a)
+# write.csv(m2a, file = "m2a.csv", row.names = FALSE)
+
+m2a <- read.csv("m2a.csv", stringsAsFactors = FALSE)
+
+plot.coef(m2a) + labs(title = "Figure 2: Not willing to write unethical code")
+
+```
+
+Table 1. 
+
+
+```{r}
+kable(t2, caption = paste("Table 1:", t2_tit))
+```
+
+Table 2.
+
+```{r}
+kable(t4, caption = paste("Table 2:", t4_tit))
+
+```
+
+Table 3. 
+
+```{r}
+kable(t3, caption = paste("Table 3:",t3_tit))
+```
+
+This makes sense. Because, ultimately, those running a company or organisation should be responsible for whatever is done under their responsibility. Let's have a closer look at the percentages of developers who think that it is not individuals themselves but rather management being responsible. Are there differences across countries?
+
+```{r}
+d1 <- dat %>%
+  mutate(oblig = as.integer(EthicalImplications == "Yes"),
+         resp = as.integer(EthicsResponsible == "Upper management at the company/organization")) %>%
+  group_by(iso2) %>%
+  summarise(ethical = mean(ethical, na.rm = TRUE),
+            unethical = mean(unethical, na.rm = TRUE),
+            oblig = mean(oblig, na.rm = TRUE),
+            resp = mean(resp, na.rm = TRUE),
+            n = n()) %>%
+  ungroup() %>%
+  arrange(desc(resp)) %>%
+  dplyr::filter(n > 29) %>%
+  mutate(country = countrycode(iso2, "iso2c", "country.name"))
+
+
+top_10 <- paste(arrange(d1, -resp)$country[1:10], collapse = ", ")
+flop_10 <- paste(arrange(d1, resp)$country[1:10], collapse = ", ")
+
+shap.df <- read.csv2("wm3.csv")
+
+shap.df <- left_join(shap.df, d1, by = c("ISO2" = "iso2"))
+
+map1 <- ggplot() +
+  geom_polygon(data = shap.df, aes(long, lat, group = group, fill = 100*resp)) +
+  geom_path(data = shap.df, aes(long, lat, group = group), colour = "white") +
+  labs(title = "Figure 3: Developers who think that upper management is responsible for unethical code",
+       fill = "Percentage of respondents",
+       caption = "Source: Own calculations based on Stack Overflow Developer Survey 2018\nIncludes only countries with at least 30 respondents",
+       x = "", y = "") +
+  theme(axis.text = element_blank(), axis.ticks = element_blank()) +
+  coord_map(xlim = c(-165, 165), ylim = c(-70, 85))
+
+```
+
+plot the map (Figure 3)
+
+```{r}
+map1
+
+```
+
+```{r}
+
+temp <- read.xlsx("2018_CPI_FullDataSet.xlsx", startRow = 3)
+temp <- temp %>%
+  mutate(iso2 = countrycode(ISO3, "iso3c", "iso2c")) %>%
+  dplyr::select(-Country)
+
+temp2 <- read.csv("human-rights-protection.csv", stringsAsFactors = FALSE)
+names(temp2)[4] <- "human.rights.protection"
+
+temp2 <- temp2 %>%
+  mutate(iso2 = countrycode(Code, "iso3c", "iso2c")) %>%
+  filter(Year > 2000) %>%
+  group_by(iso2) %>%
+  summarise(human.rights.protection = mean(human.rights.protection))
+
+nrow(d1);nrow(temp)
+d1 <- left_join(d1, temp, by = "iso2")
+rm(temp)
+d1 <- left_join(d1, temp2, by = "iso2")
+rm(temp2)
+
+p3a <- ggplot(d1, aes(CPI.Score.2018, resp)) +
+  geom_smooth() + geom_point() + 
+  labs(title = "Figure 4a: Corruption perception and responsibility of management in companies",
+       x = "CPI.Score.2018 (higher = less corruption)", y = "Proportion of developers saying\n management is responsible for unethical code", 
+       caption = "Own calculation based on Stack Overflow Developer Survey 2018 (see footnote 3)\n and Corruption Perception Index 2018 (footnote 4)") +
+  theme_bw()
+
+p3b <- ggplot(d1, aes(human.rights.protection, resp)) +
+  geom_smooth() + geom_point() +   
+  labs(title = "Figure 4a: Corruption perception and responsibility of management in companies",
+       x = "Human Rights Protection Score (average 2000-2004)", y = "Proportion of developers saying\n management is responsible for unethical code", 
+       caption = "Own calculation based on Stack Overflow Developer Survey 2018 (see footnote 3)\n and human rights protection score (footnote 5)") +
+  theme_bw()
+
+cor1 <- round(cor.test(d1$CPI.Score.2018, d1$resp)$estimate, 2)
+cor2 <- round(cor.test(d1$resp, d1$human.rights.protection)$estimate, 2)
+cor3 <- round(cor.test(d1$CPI.Score.2018, d1$human.rights.protection)$estimate, 2)
+
+```
+
+```{r}
+p3a
+```
+
+```{r}
+p3b
+```
+
+
+If you find any errors or suggestions for improvement - please let me know (see my contact details at the blog at https://david-reichel.github.io).
+
+###############################################################################
